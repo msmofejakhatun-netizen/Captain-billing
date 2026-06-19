@@ -1,0 +1,6 @@
+{
+  "name": "Captain",
+  "description": "A high-performance Android application designed for restaurant captains to manage tables, take orders, process KOTs, view bills, and complete settlements in real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
