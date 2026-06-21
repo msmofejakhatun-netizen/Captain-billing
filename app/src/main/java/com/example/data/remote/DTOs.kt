@@ -69,6 +69,31 @@ data class TableDto(
     val status: String? = null,
     val assignedCaptainId: String? = null,
     val currentOrderId: Any? = null
+) {
+    fun toDomain(): com.example.domain.model.RestaurantTable {
+        return com.example.domain.model.RestaurantTable(
+            id = id ?: underscoreId ?: "unknown_table",
+            tableNumber = tableNumber ?: "0",
+            name = "Table $tableNumber",
+            status = try {
+                com.example.domain.model.TableStatus.valueOf(status ?: "AVAILABLE")
+            } catch (e: Exception) {
+                com.example.domain.model.TableStatus.AVAILABLE
+            },
+            assignedCaptainId = assignedCaptainId,
+            activeOrderId = when (val orderId = currentOrderId) {
+                is String -> orderId
+                is Map<*, *> -> orderId["id"]?.toString() ?: orderId["_id"]?.toString()
+                else -> null
+            }
+        )
+    }
+}
+
+data class TableResponse(
+    val success: Boolean? = null,
+    val table: TableDto? = null,
+    val data: TableDto? = null
 )
 
 data class TablesResponse(
@@ -188,7 +213,11 @@ data class OrderDto(
     val id: String? = null,
     @com.squareup.moshi.Json(name = "_id") val underscoreId: String? = null,
     val tableId: String? = null,
+    @com.squareup.moshi.Json(name = "table_id") val table_id: String? = null,
+    @com.squareup.moshi.Json(name = "table") val table: TableDto? = null,
     val items: List<OrderItemDto>? = null,
+    @com.squareup.moshi.Json(name = "orderItems") val orderItems: List<OrderItemDto>? = null,
+    @com.squareup.moshi.Json(name = "order_items") val order_items: List<OrderItemDto>? = null,
     val status: String? = null,
     val captainId: String? = null,
     val totalAmount: Double? = null,
@@ -208,8 +237,8 @@ data class OrderDto(
         }
         return com.example.domain.model.Order(
             id = id ?: underscoreId ?: "unknown_order",
-            tableId = tableId ?: "",
-            items = items?.map { it.toDomain() } ?: emptyList(),
+            tableId = tableId ?: table_id ?: table?.id ?: "",
+            items = (items ?: orderItems ?: order_items)?.map { it.toDomain() } ?: emptyList(),
             status = status ?: "ACTIVE",
             captainId = captainId ?: "unknown_captain",
             totalAmount = totalAmount ?: 0.0,
@@ -223,6 +252,57 @@ data class OrderResponse(
     val order: OrderDto? = null,
     val data: OrderDto? = null
 )
+
+data class OrdersResponse(
+    val success: Boolean? = null,
+    val orders: List<OrderDto>? = null,
+    val data: List<OrderDto>? = null
+)
+
+class OrdersResponseAdapter {
+    @com.squareup.moshi.FromJson
+    fun fromJson(reader: com.squareup.moshi.JsonReader): OrdersResponse {
+        val moshi = com.squareup.moshi.Moshi.Builder().addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory()).build()
+        val listType = com.squareup.moshi.Types.newParameterizedType(List::class.java, OrderDto::class.java)
+        val listAdapter = moshi.adapter<List<OrderDto>>(listType)
+        
+        return if (reader.peek() == com.squareup.moshi.JsonReader.Token.BEGIN_ARRAY) {
+            val list = listAdapter.fromJson(reader)
+            OrdersResponse(success = true, orders = list)
+        } else {
+            val mapAdapter = moshi.adapter<Map<String, Any>>(com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java))
+            val map = mapAdapter.fromJson(reader)
+            val success = (map?.get("success") as? Boolean) ?: true
+            val rawList = (map?.get("orders") ?: map?.get("data")) as? List<*>
+            val orders = if (rawList != null) {
+                val listString = moshi.adapter(Any::class.java).toJson(rawList)
+                listAdapter.fromJson(listString)
+            } else {
+                null
+            }
+            OrdersResponse(success = success, orders = orders)
+        }
+    }
+
+    @com.squareup.moshi.ToJson
+    fun toJson(writer: com.squareup.moshi.JsonWriter, value: OrdersResponse?) {
+        if (value == null) {
+            writer.nullValue()
+            return
+        }
+        writer.beginObject()
+        writer.name("success").value(value.success)
+        writer.name("orders")
+        if (value.orders != null) {
+            val moshi = com.squareup.moshi.Moshi.Builder().addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory()).build()
+            val listType = com.squareup.moshi.Types.newParameterizedType(List::class.java, OrderDto::class.java)
+            moshi.adapter<List<OrderDto>>(listType).toJson(writer, value.orders)
+        } else {
+            writer.nullValue()
+        }
+        writer.endObject()
+    }
+}
 
 fun parseOrderResponse(rawJson: String): com.example.domain.model.Order {
     val moshi = com.squareup.moshi.Moshi.Builder()

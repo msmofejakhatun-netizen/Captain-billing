@@ -17,7 +17,7 @@ interface ApiService {
     @POST("/api/tables/open")
     suspend fun openTable(
         @Body request: TableOpenRequest
-    ): Response<RestaurantTable>
+    ): Response<TableResponse>
 
     @GET("/api/menu-items")
     suspend fun getMenuItems(): Response<okhttp3.ResponseBody>
@@ -56,7 +56,7 @@ interface ApiService {
     ): Response<PaymentSettlement>
 
     @GET("/api/orders")
-    suspend fun getOrders(): Response<List<Order>>
+    suspend fun getOrders(): Response<OrdersResponse>
 
     // --- Admin POS Dashboard CRUD Endpoints ---
 

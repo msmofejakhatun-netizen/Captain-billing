@@ -48,6 +48,13 @@ class CartViewModel(private val repository: CaptainRepository) : ViewModel() {
                 } else {
                     Log.d("CART_ORDER_ID", "null")
                 }
+                
+                Log.d("FINAL_ORDER_RESULT", order?.toString() ?: "null")
+                Log.d("FINAL_ORDER_ID", order?.id ?: "null")
+                Log.d("FINAL_ORDER_STATUS", order?.status ?: "null")
+                Log.d("FINAL_ORDER_ITEMS_SIZE", order?.items?.size?.toString() ?: "0")
+                if (order == null) Log.d("WHY_ORDER_NULL", "No matching order returned from repository")
+
                 _activeOrder.value = order
             } catch (e: Exception) {
                 _errorMessage.value = e.message ?: "Failed to load order cart"

@@ -654,7 +654,9 @@ class CaptainRepositoryImpl(
                     lastError = null
                 )
 
-                val opened = response.body()!!
+                val responseBody = response.body()!!
+                val tableDto = responseBody.table ?: responseBody.data ?: throw Exception("Table not found in response")
+                val opened = tableDto.toDomain()
                 val idx = tables.indexOfFirst { it.id == opened.id }
                 if (idx != -1) tables[idx] = opened
                 
@@ -844,35 +846,45 @@ class CaptainRepositoryImpl(
         val table = tables.find { it.id == tableId }
         Log.d("TABLE_OBJECT", table.toString())
         Log.d("TABLE_ACTIVE_ORDER_ID", table?.activeOrderId ?: "null")
-        Log.d("TABLES_CACHE_SIZE", tables.size.toString())
-        Log.d("ORDERS_CACHE_SIZE", orders.size.toString())
+        Log.d("ORDERS_SIZE", orders.size.toString())
 
-        // Print all orders for debugging
         orders.forEach {
-            Log.d("ORDER_DEBUG", "Order ID: ${it.id}, Status: ${it.status}")
+            Log.d(
+                "ORDER_DEBUG",
+                "id=${it.id}, tableId=${it.tableId}, status=${it.status}"
+            )
         }
 
-        // 1. Check cache (original mechanism first)
-        val orderFromCache = orders.find { it.id == table?.activeOrderId && it.status == "ACTIVE" }
-        Log.d("CART_CACHE_ORDER", orderFromCache?.id ?: "null")
+        // 1. Try to find by activeOrderId and status ACTIVE
+        var order = orders.find { it.id == table?.activeOrderId && it.status == "ACTIVE" }
         
-        if (orderFromCache != null) return orderFromCache
+        // 2. Fallback: Find by tableId and status ACTIVE/PENDING/OPEN
+        if (order == null) {
+            Log.d("CART_FETCH_LOG", "Primary lookup failed, trying fallback lookup by tableId: $tableId")
+            order = orders.find { 
+                it.tableId == tableId && 
+                (it.status == "ACTIVE" || it.status == "PENDING" || it.status == "OPEN") 
+            }
+        }
         
-        // 2. Fetch from backend
+        Log.d("CART_CACHE_ORDER", order?.id ?: "null")
+        if (order != null) return order
+        
+        // 3. Fetch from backend if still null
         Log.d("CART_FETCH_START", "Fetching orders for $tableId from backend...")
         val result = refreshOrders()
         
         if (result.isSuccess) {
             // Find again
-            val order = orders.find { it.id == table?.activeOrderId && it.status == "ACTIVE" }
-            Log.d("CART_FETCH_ORDER_ID", order?.id ?: "null")
+            order = orders.find { it.tableId == tableId && (it.status == "ACTIVE" || it.status == "PENDING" || it.status == "OPEN") }
             
-            // Log if order exists but status is not "ACTIVE"
-            if (order == null && table?.activeOrderId != null) {
-                val orderWithMatchingId = orders.find { it.id == table.activeOrderId }
-                if (orderWithMatchingId != null) {
-                    Log.d("ORDER_STATUS_MISMATCH_DETECTED", "Order ${orderWithMatchingId.id} found but status is ${orderWithMatchingId.status}")
-                }
+            Log.d("FOUND_ORDER_ID", order?.id ?: "null")
+            Log.d("FOUND_ORDER_STATUS", order?.status ?: "null")
+            Log.d("FOUND_ORDER_TABLE_ID", order?.tableId ?: "null")
+            Log.d("FOUND_ORDER_ITEMS_COUNT", order?.items?.size?.toString() ?: "null")
+            Log.d("FOUND_ORDER_OBJECT", order.toString())
+            order?.items?.forEach {
+                Log.d("CART_ITEM", "name=${it.name}, qty=${it.quantity}, price=${it.price}")
             }
             
             return order
@@ -896,15 +908,24 @@ class CaptainRepositoryImpl(
             }
             
             Log.d("CART_FETCH_RESPONSE", rawResponse)
+            Log.d("RAW_ORDER_JSON", rawResponse)
             
-            if (response.isSuccessful && response.body() != null) {
-                val fetched = response.body()!!
-                Log.d("API_ORDERS_RECEIVED", fetched.map { it.id }.joinToString { "," })
-                orders.clear()
-                orders.addAll(fetched)
-                return@withContext Result.success(fetched)
+            if (response.isSuccessful) {
+                if (response.body() != null) {
+                    val fetchedResponse = response.body()!!
+                    val fetched = fetchedResponse.orders ?: fetchedResponse.data ?: emptyList()
+                    Log.d("API_ORDERS_RECEIVED", fetched.map { it.id }.joinToString { "," })
+                    val fetchedOrders = fetched.map { it.toDomain() }
+                    orders.clear()
+                    orders.addAll(fetchedOrders)
+                    return@withContext Result.success(fetchedOrders)
+                } else {
+                    Log.e("API_ORDERS_PARSE_ERROR", "Response body is null, but isSuccessful is true")
+                    return@withContext Result.failure(Exception("Parsing error: Received empty body for orders"))
+                }
+            } else {
+                return@withContext Result.failure(Exception("Failed to fetch orders: ${response.code()}"))
             }
-            return@withContext Result.failure(Exception("Failed to fetch orders: ${response.code()}"))
         } catch (e: Exception) {
             Log.e("CaptainRepository", "Error refreshing orders", e)
             return@withContext Result.failure(e)

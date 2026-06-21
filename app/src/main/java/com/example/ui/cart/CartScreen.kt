@@ -1,5 +1,6 @@
 package com.example.ui.cart
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -75,6 +76,9 @@ fun CartScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             val items = activeOrder?.items ?: emptyList()
+            LaunchedEffect(items) {
+                Log.d("CART_SCREEN_ITEMS_SIZE", items.size.toString())
+            }
 
             if (isLoading && items.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
