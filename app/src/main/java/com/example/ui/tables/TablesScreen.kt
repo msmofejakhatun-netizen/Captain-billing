@@ -247,6 +247,7 @@ fun TablesScreen(
                                                 if (userRole == "BILLER") {
                                                     showRoleGatingMessage = "Billers cannot manage menu ordering. This is a Captain action."
                                                 } else {
+                                                    android.util.Log.d("TABLE_SELECTED_ID", table.id)
                                                     onNavigateToMenu(table.id)
                                                 }
                                             }
@@ -309,6 +310,7 @@ fun TablesScreen(
                                 Button(
                                     onClick = {
                                         selectedTableForActions = null
+                                        android.util.Log.d("TABLE_SELECTED_ID", table.id)
                                         onNavigateToMenu(table.id)
                                     },
                                     modifier = Modifier.fillMaxWidth().testTag("modal_add_item_btn"),

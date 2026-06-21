@@ -2,6 +2,7 @@ package com.example.ui.cart
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.util.Log
 import com.example.data.repository.CaptainRepository
 import com.example.domain.model.Order
 import kotlinx.coroutines.flow.*
@@ -13,6 +14,9 @@ class CartViewModel(private val repository: CaptainRepository) : ViewModel() {
 
     private val _activeOrder = MutableStateFlow<Order?>(null)
     val activeOrder = _activeOrder.asStateFlow()
+
+    private val _tableNumber = MutableStateFlow<String?>(null)
+    val tableNumber = _tableNumber.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -30,10 +34,21 @@ class CartViewModel(private val repository: CaptainRepository) : ViewModel() {
 
     fun loadCart(tableId: String) {
         viewModelScope.launch {
+            Log.d("CART_TABLE_ID", tableId)
             _isLoading.value = true
             _errorMessage.value = null
             try {
-                _activeOrder.value = repository.getActiveOrder(tableId)
+                val table = repository.getTableById(tableId)
+                _tableNumber.value = table?.tableNumber ?: tableId
+                
+                val order = repository.getActiveOrder(tableId)
+                Log.d("CART_PARSED_ORDER", order?.toString() ?: "null")
+                if (order != null) {
+                    Log.d("CART_ORDER_ID", order.id)
+                } else {
+                    Log.d("CART_ORDER_ID", "null")
+                }
+                _activeOrder.value = order
             } catch (e: Exception) {
                 _errorMessage.value = e.message ?: "Failed to load order cart"
             }

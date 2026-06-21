@@ -43,7 +43,10 @@ fun OpenTableScreen(
         viewModel.openTableResult.collect { result ->
             if (result.isSuccess) {
                 try {
-                    onNavigateToMenu(tableNumber)
+                    val openedTable = result.getOrNull()
+                    val idToNavigate = openedTable?.id ?: tableNumber
+                    android.util.Log.d("TABLE_SELECTED_ID", idToNavigate)
+                    onNavigateToMenu(idToNavigate)
                 } catch (e: Exception) {
                     navigationErrorMsg = "TABLE OPENED BUT NAVIGATION FAILED"
                 }

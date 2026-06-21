@@ -38,6 +38,10 @@ interface CaptainRepository {
     val isOnline: StateFlow<Boolean>
     val loginApiLog: StateFlow<String?>
     val openTableDebugLog: StateFlow<OpenTableDebugState?>
+    val menuRawJson: StateFlow<String?>
+    val menuParseError: StateFlow<String?>
+    val menuApiCode: StateFlow<Int?>
+    val menuApiUrl: StateFlow<String?>
 
     val printerManager: com.example.data.printer.EpsonPrinterManager
 
@@ -57,6 +61,7 @@ interface CaptainRepository {
 
     // Cart / Order
     suspend fun getActiveOrder(tableId: String): Order?
+    suspend fun getTableById(tableId: String): RestaurantTable?
     suspend fun addItemToOrder(tableId: String, menuItemId: String, quantity: Int): Result<Order>
     suspend fun updateOrderItem(tableId: String, itemId: String, quantity: Int): Result<Order>
     suspend fun removeOrderItem(tableId: String, itemId: String): Result<Order>
@@ -153,6 +158,15 @@ class CaptainRepositoryImpl(
     override val loginApiLog = _loginApiLog.asStateFlow()
     private val _openTableDebugLog = MutableStateFlow<OpenTableDebugState?>(null)
     override val openTableDebugLog = _openTableDebugLog.asStateFlow()
+    
+    private val _menuRawJson = MutableStateFlow<String?>(null)
+    override val menuRawJson = _menuRawJson.asStateFlow()
+    private val _menuParseError = MutableStateFlow<String?>(null)
+    override val menuParseError = _menuParseError.asStateFlow()
+    private val _menuApiCode = MutableStateFlow<Int?>(null)
+    override val menuApiCode = _menuApiCode.asStateFlow()
+    private val _menuApiUrl = MutableStateFlow<String?>(null)
+    override val menuApiUrl = _menuApiUrl.asStateFlow()
     
     private val prefs = context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
 
@@ -532,6 +546,8 @@ class CaptainRepositoryImpl(
                 if (dtoList != null) {
                     val parsedTables = dtoList.map { dto ->
                         val tableId = dto.id ?: dto.underscoreId ?: ""
+                        Log.d("TABLE_API_ID", dto.id ?: "null")
+                        Log.d("TABLE_DOMAIN_ID", tableId)
                         val nameStr = dto.tableNumber ?: "Table $tableId"
                         val matchedStatus = try {
                             val upperStatus = dto.status?.uppercase() ?: "AVAILABLE"
@@ -552,7 +568,17 @@ class CaptainRepositoryImpl(
                             name = nameStr,
                             status = matchedStatus,
                             assignedCaptainId = dto.assignedCaptainId,
-                            activeOrderId = dto.currentOrderId
+                            activeOrderId = when (val orderId = dto.currentOrderId) {
+                                is String -> orderId
+                                is Map<*, *> -> {
+                                    Log.d("DEBUG_APP", "ORDER_ID_OBJECT: $orderId")
+                                    orderId["_id"]?.toString() ?: orderId["id"]?.toString()
+                                }
+                                else -> {
+                                    if (orderId != null) Log.d("DEBUG_APP", "ORDER_ID_UNKNOWN: $orderId")
+                                    null
+                                }
+                            }
                         )
                     }
 
@@ -673,28 +699,78 @@ class CaptainRepositoryImpl(
 
     override suspend fun getMenuItems(refresh: Boolean): Result<List<MenuItem>> = withContext(dispatcher) {
         val rCode = currentUser?.restaurantCode ?: "DEFAULT"
+        _menuApiUrl.value = BuildConfig.API_BASE_URL + "/api/menu-items"
+        _menuApiCode.value = null
+        _menuRawJson.value = null
+        _menuParseError.value = null
         try {
             val response = apiService.getMenuItems()
+            val url = response.raw().request.url.toString()
+            _menuApiUrl.value = url
+            _menuApiCode.value = response.code()
+            
             if (response.isSuccessful && response.body() != null) {
-                val fetched = response.body()!!
-                menuItems.clear()
-                menuItems.addAll(fetched)
+                val rawJson = response.body()!!.string()
+                _menuRawJson.value = rawJson
+                Log.d("MENU_RAW_JSON", rawJson)
+                
+                val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+                val listType = Types.newParameterizedType(List::class.java, com.example.data.remote.MenuItemDto::class.java)
+                val listAdapter = moshi.adapter<List<com.example.data.remote.MenuItemDto>>(listType)
+                
+                val fetchedDtos = try {
+                    if (rawJson.trim().startsWith("[")) {
+                        listAdapter.fromJson(rawJson)
+                    } else {
+                        val mapAdapter = moshi.adapter<Map<String, Any>>(
+                            Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+                        )
+                        val map = mapAdapter.fromJson(rawJson)
+                        val itemsRaw = map?.get("items") ?: map?.get("data")
+                        val jsonString = moshi.adapter(Any::class.java).toJson(itemsRaw)
+                        listAdapter.fromJson(jsonString)
+                    }
+                } catch (e: Exception) {
+                    val stack = Log.getStackTraceString(e)
+                    _menuParseError.value = "${e.javaClass.name}: ${e.message}\n$stack"
+                    Log.e("MENU_PARSE_RESULT", "Failed JSON parsing: ${e.message}", e)
+                    Log.d("MENU_RAW_JSON", "Failed raw JSON: $rawJson")
+                    null
+                }
 
-                // Cache to Room DB
-                val localEntities = fetched.map { it.toLocal(rCode) }
-                localDatabaseDao.insertMenuItems(localEntities)
-
-                return@withContext Result.success(menuItems)
+                if (fetchedDtos != null) {
+                    val fetched = fetchedDtos.map { it.toDomain() }
+                    Log.d("MENU_PARSE_RESULT", "Success: ${fetched.size} items")
+                    Log.d("MENU_ITEM_COUNT", "Loaded ${fetched.size} menu items")
+                    menuItems.clear()
+                    menuItems.addAll(fetched)
+                    // Cache to Room DB
+                    val localEntities = fetched.map { it.toLocal(rCode) }
+                    localDatabaseDao.insertMenuItems(localEntities)
+                    return@withContext Result.success(menuItems)
+                } else {
+                    if (_menuParseError.value == null) {
+                        _menuParseError.value = "Returned parsed menu was null"
+                    }
+                    return@withContext Result.failure(Exception("Parsing error"))
+                }
+                
             } else {
+                val errorBody = response.errorBody()?.string() ?: "No error body"
+                _menuRawJson.value = "Error Body: $errorBody"
+                Log.d("MENU_API_RESPONSE", "Error: ${response.code()}")
                 val cached = localDatabaseDao.getMenuItems(rCode)
                 if (cached.isNotEmpty()) {
                     menuItems.clear()
                     menuItems.addAll(cached.map { it.toDomain() })
                     return@withContext Result.success(menuItems)
                 }
-                return@withContext Result.failure(Exception("Failed to get menu items"))
+                return@withContext Result.failure(Exception("Failed to get menu items, code: ${response.code()}"))
             }
         } catch (e: Exception) {
+            val stack = Log.getStackTraceString(e)
+            _menuParseError.value = "Exception in network request: ${e.javaClass.name}: ${e.message}\n$stack"
+            Log.d("MENU_PARSE_RESULT", "Exception: ${e.message}")
             val cached = localDatabaseDao.getMenuItems(rCode)
             if (cached.isNotEmpty()) {
                 menuItems.clear()
@@ -710,13 +786,38 @@ class CaptainRepositoryImpl(
         try {
             val response = apiService.getCategories()
             if (response.isSuccessful && response.body() != null) {
-                val fetched = response.body()!!
+                val rawJson = response.body()!!.string()
+                Log.d("CATEGORIES_RAW_JSON", rawJson)
                 
-                // Cache to Room DB
-                val localEntities = fetched.map { it.toLocalCategory(rCode) }
-                localDatabaseDao.insertCategories(localEntities)
+                val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+                val listType = Types.newParameterizedType(List::class.java, String::class.java)
+                val listAdapter = moshi.adapter<List<String>>(listType)
+                
+                val fetched = try {
+                    if (rawJson.trim().startsWith("[")) {
+                        listAdapter.fromJson(rawJson)
+                    } else {
+                        val mapAdapter = moshi.adapter<Map<String, Any>>(
+                            Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+                        )
+                        val map = mapAdapter.fromJson(rawJson)
+                        val itemsRaw = map?.get("categories") ?: map?.get("items") ?: map?.get("data")
+                        val jsonString = moshi.adapter(Any::class.java).toJson(itemsRaw)
+                        listAdapter.fromJson(jsonString)
+                    }
+                } catch (e: Exception) {
+                    Log.e("CATEGORIES_PARSE", "Failed: ${e.message}", e)
+                    null
+                }
 
-                return@withContext Result.success(fetched)
+                if (fetched != null) {
+                    // Cache to Room DB
+                    val localEntities = fetched.map { it.toLocalCategory(rCode) }
+                    localDatabaseDao.insertCategories(localEntities)
+                    return@withContext Result.success(fetched)
+                } else {
+                    return@withContext Result.failure(Exception("Parsing error"))
+                }
             } else {
                 val cached = localDatabaseDao.getCategories(rCode)
                 if (cached.isNotEmpty()) {
@@ -733,17 +834,119 @@ class CaptainRepositoryImpl(
         }
     }
 
+    override suspend fun getTableById(tableId: String): RestaurantTable? {
+        return tables.find { it.id == tableId }
+    }
+
     override suspend fun getActiveOrder(tableId: String): Order? {
-        val table = tables.find { it.id == tableId } ?: return null
-        return orders.find { it.id == table.activeOrderId && it.status == "ACTIVE" }
+        Log.d("CART_FETCH_START", "TableId: $tableId")
+
+        val table = tables.find { it.id == tableId }
+        Log.d("TABLE_OBJECT", table.toString())
+        Log.d("TABLE_ACTIVE_ORDER_ID", table?.activeOrderId ?: "null")
+        Log.d("TABLES_CACHE_SIZE", tables.size.toString())
+        Log.d("ORDERS_CACHE_SIZE", orders.size.toString())
+
+        // Print all orders for debugging
+        orders.forEach {
+            Log.d("ORDER_DEBUG", "Order ID: ${it.id}, Status: ${it.status}")
+        }
+
+        // 1. Check cache (original mechanism first)
+        val orderFromCache = orders.find { it.id == table?.activeOrderId && it.status == "ACTIVE" }
+        Log.d("CART_CACHE_ORDER", orderFromCache?.id ?: "null")
+        
+        if (orderFromCache != null) return orderFromCache
+        
+        // 2. Fetch from backend
+        Log.d("CART_FETCH_START", "Fetching orders for $tableId from backend...")
+        val result = refreshOrders()
+        
+        if (result.isSuccess) {
+            // Find again
+            val order = orders.find { it.id == table?.activeOrderId && it.status == "ACTIVE" }
+            Log.d("CART_FETCH_ORDER_ID", order?.id ?: "null")
+            
+            // Log if order exists but status is not "ACTIVE"
+            if (order == null && table?.activeOrderId != null) {
+                val orderWithMatchingId = orders.find { it.id == table.activeOrderId }
+                if (orderWithMatchingId != null) {
+                    Log.d("ORDER_STATUS_MISMATCH_DETECTED", "Order ${orderWithMatchingId.id} found but status is ${orderWithMatchingId.status}")
+                }
+            }
+            
+            return order
+        }
+        
+        return null
+    }
+
+    private suspend fun refreshOrders(): Result<List<Order>> = withContext(dispatcher) {
+        try {
+            val response = apiService.getOrders()
+            val rawResponse = if (response.isSuccessful) {
+                // Peek the stream because body() might be consumed
+                try {
+                     response.raw().peekBody(1024 * 1024).string()
+                } catch (e: Exception) {
+                    "Unable to peek"
+                }
+            } else {
+                response.errorBody()?.string() ?: ""
+            }
+            
+            Log.d("CART_FETCH_RESPONSE", rawResponse)
+            
+            if (response.isSuccessful && response.body() != null) {
+                val fetched = response.body()!!
+                Log.d("API_ORDERS_RECEIVED", fetched.map { it.id }.joinToString { "," })
+                orders.clear()
+                orders.addAll(fetched)
+                return@withContext Result.success(fetched)
+            }
+            return@withContext Result.failure(Exception("Failed to fetch orders: ${response.code()}"))
+        } catch (e: Exception) {
+            Log.e("CaptainRepository", "Error refreshing orders", e)
+            return@withContext Result.failure(e)
+        }
     }
 
     override suspend fun addItemToOrder(tableId: String, menuItemId: String, quantity: Int): Result<Order> = withContext(dispatcher) {
+        Log.d("ADD_ITEM_TABLE_ID", tableId)
         val rCode = currentUser?.restaurantCode ?: "DEFAULT"
+        val baseUrl = BuildConfig.API_BASE_URL.trim().let { if (it.startsWith("http://") || it.startsWith("https://")) it else "https://backendrepo-production-7e7f.up.railway.app" }
+        val fullUrl = "$baseUrl/api/orders/add-item"
+        val debugMoshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+        val requestBodyJson = try {
+            debugMoshi.adapter(com.example.data.remote.AddItemRequest::class.java).toJson(com.example.data.remote.AddItemRequest(tableId, menuItemId, quantity))
+        } catch (jsonEx: Exception) {
+            "{}"
+        }
+
         try {
             val response = apiService.addItemToOrder(AddItemRequest(tableId, menuItemId, quantity))
-            if (response.isSuccessful && response.body() != null) {
-                val updatedOrder = response.body()!!
+            val rawResponse = if (response.isSuccessful) {
+                response.body()?.string() ?: ""
+            } else {
+                response.errorBody()?.string() ?: ""
+            }
+
+            Log.d("ADD_ITEM_RAW_RESPONSE", rawResponse)
+
+            com.example.ui.menu.AddCartDebugger.updateDebug(
+                com.example.ui.menu.AddCartDebugInfo(
+                    endpoint = "/api/orders/add-item",
+                    fullUrl = fullUrl,
+                    httpMethod = "POST",
+                    requestBodyJson = requestBodyJson,
+                    statusCode = response.code(),
+                    rawResponseBody = rawResponse,
+                    exceptionStacktrace = ""
+                )
+            )
+
+            if (response.isSuccessful && rawResponse.isNotEmpty()) {
+                val updatedOrder = com.example.data.remote.parseOrderResponse(rawResponse)
                 val idx = orders.indexOfFirst { it.id == updatedOrder.id }
                 if (idx != -1) orders[idx] = updatedOrder else orders.add(updatedOrder)
 
@@ -760,9 +963,20 @@ class CaptainRepositoryImpl(
                 orderEventFlow.emit(updatedOrder)
                 return@withContext Result.success(updatedOrder)
             } else {
-                return@withContext Result.failure(Exception("Failed to add menu item (${response.code()})"))
+                return@withContext Result.failure(Exception("Failed to add menu item (${response.code()}): $rawResponse"))
             }
         } catch (e: Exception) {
+            com.example.ui.menu.AddCartDebugger.updateDebug(
+                com.example.ui.menu.AddCartDebugInfo(
+                    endpoint = "/api/orders/add-item",
+                    fullUrl = fullUrl,
+                    httpMethod = "POST",
+                    requestBodyJson = requestBodyJson,
+                    statusCode = null,
+                    rawResponseBody = "",
+                    exceptionStacktrace = e.stackTraceToString()
+                )
+            )
             return@withContext Result.failure(e)
         }
     }
@@ -770,15 +984,22 @@ class CaptainRepositoryImpl(
     override suspend fun updateOrderItem(tableId: String, itemId: String, quantity: Int): Result<Order> = withContext(dispatcher) {
         try {
             val response = apiService.updateOrderItem(UpdateItemRequest(tableId, itemId, quantity))
-            if (response.isSuccessful && response.body() != null) {
-                val updatedOrder = response.body()!!
+            val rawResponse = if (response.isSuccessful) {
+                response.body()?.string() ?: ""
+            } else {
+                response.errorBody()?.string() ?: ""
+            }
+            Log.d("UPDATE_ITEM_RAW_RESPONSE", rawResponse)
+
+            if (response.isSuccessful && rawResponse.isNotEmpty()) {
+                val updatedOrder = com.example.data.remote.parseOrderResponse(rawResponse)
                 val idx = orders.indexOfFirst { it.id == updatedOrder.id }
                 if (idx != -1) orders[idx] = updatedOrder
 
                 orderEventFlow.emit(updatedOrder)
                 return@withContext Result.success(updatedOrder)
             } else {
-                return@withContext Result.failure(Exception("Failed to update order item (${response.code()})"))
+                return@withContext Result.failure(Exception("Failed to update order item (${response.code()}): $rawResponse"))
             }
         } catch (e: Exception) {
             return@withContext Result.failure(e)
@@ -788,15 +1009,22 @@ class CaptainRepositoryImpl(
     override suspend fun removeOrderItem(tableId: String, itemId: String): Result<Order> = withContext(dispatcher) {
         try {
             val response = apiService.removeOrderItem(RemoveItemRequest(tableId, itemId))
-            if (response.isSuccessful && response.body() != null) {
-                val updatedOrder = response.body()!!
+            val rawResponse = if (response.isSuccessful) {
+                response.body()?.string() ?: ""
+            } else {
+                response.errorBody()?.string() ?: ""
+            }
+            Log.d("REMOVE_ITEM_RAW_RESPONSE", rawResponse)
+
+            if (response.isSuccessful && rawResponse.isNotEmpty()) {
+                val updatedOrder = com.example.data.remote.parseOrderResponse(rawResponse)
                 val idx = orders.indexOfFirst { it.id == updatedOrder.id }
                 if (idx != -1) orders[idx] = updatedOrder
 
                 orderEventFlow.emit(updatedOrder)
                 return@withContext Result.success(updatedOrder)
             } else {
-                return@withContext Result.failure(Exception("Failed to remove order item (${response.code()})"))
+                return@withContext Result.failure(Exception("Failed to remove order item (${response.code()}): $rawResponse"))
             }
         } catch (e: Exception) {
             return@withContext Result.failure(e)
@@ -1065,9 +1293,10 @@ class CaptainRepositoryImpl(
 
     override suspend fun createMenuItem(item: MenuItem): Result<MenuItem> = withContext(dispatcher) {
         try {
-            val response = apiService.createMenuItem(item)
+            val dto = com.example.data.remote.MenuItemDto.fromDomain(item)
+            val response = apiService.createMenuItem(dto)
             if (response.isSuccessful && response.body() != null) {
-                val created = response.body()!!
+                val created = response.body()!!.toDomain()
                 val idx = menuItems.indexOfFirst { it.id == created.id }
                 if (idx != -1) {
                     menuItems[idx] = created
@@ -1086,9 +1315,10 @@ class CaptainRepositoryImpl(
 
     override suspend fun updateMenuItem(item: MenuItem): Result<MenuItem> = withContext(dispatcher) {
         try {
-            val response = apiService.updateMenuItem(item.id, item)
+            val dto = com.example.data.remote.MenuItemDto.fromDomain(item)
+            val response = apiService.updateMenuItem(item.id, dto)
             if (response.isSuccessful && response.body() != null) {
-                val updated = response.body()!!
+                val updated = response.body()!!.toDomain()
                 val idx = menuItems.indexOfFirst { it.id == updated.id }
                 if (idx != -1) {
                     menuItems[idx] = updated
@@ -1176,7 +1406,35 @@ class CaptainRepositoryImpl(
         try {
             val response = apiService.getUsers()
             if (response.isSuccessful && response.body() != null) {
-                return@withContext Result.success(response.body()!!)
+                val rawJson = response.body()!!.string()
+                Log.d("USERS_RAW_JSON", rawJson)
+                
+                val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+                val listType = Types.newParameterizedType(List::class.java, UserDto::class.java)
+                val listAdapter = moshi.adapter<List<UserDto>>(listType)
+                
+                val fetched = try {
+                    if (rawJson.trim().startsWith("[")) {
+                        listAdapter.fromJson(rawJson)
+                    } else {
+                        val mapAdapter = moshi.adapter<Map<String, Any>>(
+                            Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+                        )
+                        val map = mapAdapter.fromJson(rawJson)
+                        val itemsRaw = map?.get("users") ?: map?.get("data") ?: map?.get("items")
+                        val jsonString = moshi.adapter(Any::class.java).toJson(itemsRaw)
+                        listAdapter.fromJson(jsonString)
+                    }
+                } catch (e: Exception) {
+                    Log.e("USERS_PARSE", "Failed: ${e.message}", e)
+                    null
+                }
+
+                if (fetched != null) {
+                    return@withContext Result.success(fetched)
+                } else {
+                    return@withContext Result.failure(Exception("Parsing error"))
+                }
             } else {
                 return@withContext Result.failure(Exception("Failed to load users (${response.code()})"))
             }

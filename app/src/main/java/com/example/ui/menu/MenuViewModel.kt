@@ -12,6 +12,11 @@ class MenuViewModel(private val repository: CaptainRepository) : ViewModel() {
 
     val isOnline = repository.isOnline.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
+    val menuRawJson = repository.menuRawJson.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val menuParseError = repository.menuParseError.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val menuApiCode = repository.menuApiCode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val menuApiUrl = repository.menuApiUrl.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _menuItems = MutableStateFlow<List<MenuItem>>(emptyList())
     val menuItems = _menuItems.asStateFlow()
 
@@ -41,6 +46,16 @@ class MenuViewModel(private val repository: CaptainRepository) : ViewModel() {
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val debugInfo = AddCartDebugger.debugFlow.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        null
+    )
+
+    fun clearDebugInfo() {
+        AddCartDebugger.clear()
+    }
+
     init {
         loadMenu()
         observeRealtimeMenuUpdates()
@@ -67,6 +82,9 @@ class MenuViewModel(private val repository: CaptainRepository) : ViewModel() {
             
             menuResult.onSuccess { list ->
                 _menuItems.value = list
+                if (list.isNotEmpty()) {
+                    _errorMessage.value = null
+                }
             }.onFailure { err ->
                 _errorMessage.value = err.message ?: "Failed to synchronize menu items"
             }

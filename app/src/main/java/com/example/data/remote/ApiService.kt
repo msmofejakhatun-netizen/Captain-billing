@@ -20,25 +20,25 @@ interface ApiService {
     ): Response<RestaurantTable>
 
     @GET("/api/menu-items")
-    suspend fun getMenuItems(): Response<List<MenuItem>>
+    suspend fun getMenuItems(): Response<okhttp3.ResponseBody>
 
     @GET("/api/categories")
-    suspend fun getCategories(): Response<List<String>>
+    suspend fun getCategories(): Response<okhttp3.ResponseBody>
 
     @POST("/api/orders/add-item")
     suspend fun addItemToOrder(
         @Body request: AddItemRequest
-    ): Response<Order>
+    ): Response<okhttp3.ResponseBody>
 
     @POST("/api/orders/update-item")
     suspend fun updateOrderItem(
         @Body request: UpdateItemRequest
-    ): Response<Order>
+    ): Response<okhttp3.ResponseBody>
 
     @POST("/api/orders/remove-item")
     suspend fun removeOrderItem(
         @Body request: RemoveItemRequest
-    ): Response<Order>
+    ): Response<okhttp3.ResponseBody>
 
     @POST("/api/kot/send")
     suspend fun sendKOT(
@@ -80,14 +80,14 @@ interface ApiService {
     // Menu Items CRUD
     @POST("/api/menu-items")
     suspend fun createMenuItem(
-        @Body item: MenuItem
-    ): Response<MenuItem>
+        @Body item: MenuItemDto
+    ): Response<MenuItemDto>
 
     @PUT("/api/menu-items/{id}")
     suspend fun updateMenuItem(
         @Path("id") id: String,
-        @Body item: MenuItem
-    ): Response<MenuItem>
+        @Body item: MenuItemDto
+    ): Response<MenuItemDto>
 
     @DELETE("/api/menu-items/{id}")
     suspend fun deleteMenuItem(
@@ -113,7 +113,7 @@ interface ApiService {
 
     // Users / Captains CRUD
     @GET("/api/users")
-    suspend fun getUsers(): Response<List<UserDto>>
+    suspend fun getUsers(): Response<okhttp3.ResponseBody>
 
     @POST("/api/users")
     suspend fun createUser(

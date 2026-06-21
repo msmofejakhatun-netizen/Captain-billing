@@ -32,12 +32,18 @@ fun MenuScreen(
     modifier: Modifier = Modifier
 ) {
     val items by viewModel.filteredItems.collectAsState()
+    val allItems by viewModel.menuItems.collectAsState()
     val categories by viewModel.categories.collectAsState()
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val errorMsg by viewModel.errorMessage.collectAsState()
     val isOnline by viewModel.isOnline.collectAsState()
+
+    val menuRawJson by viewModel.menuRawJson.collectAsState()
+    val menuParseError by viewModel.menuParseError.collectAsState()
+    val menuApiCode by viewModel.menuApiCode.collectAsState()
+    val menuApiUrl by viewModel.menuApiUrl.collectAsState()
 
     val context = LocalContext.current
 
@@ -125,6 +131,188 @@ fun MenuScreen(
                 }
             }
 
+            // API Diagnostics Debugger Card
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "🔌 MENU API DEBUGGER",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    
+                    Text(
+                        text = "URL: ${menuApiUrl ?: "N/A"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Status Code: ${menuApiCode ?: "N/A"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (menuApiCode == 200) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    )
+                    
+                    if (menuParseError != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                Text(
+                                    text = "⚠️ PARSING / RUNTIME ERROR:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Text(
+                                    text = menuParseError ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Raw Response (First 2000 Chars):",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    
+                    val rawBody = menuRawJson ?: "null / no response received"
+                    val truncatedBody = if (rawBody.length > 2000) rawBody.substring(0, 2000) + "... (truncated)" else rawBody
+                    
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 120.dp)
+                    ) {
+                        LazyColumn(modifier = Modifier.padding(6.dp)) {
+                            item {
+                                Text(
+                                    text = truncatedBody,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            val debugInfo by viewModel.debugInfo.collectAsState()
+
+            if (debugInfo != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .testTag("add_to_cart_debug_card"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (debugInfo!!.statusCode != 200 && debugInfo!!.statusCode != 201) 
+                            MaterialTheme.colorScheme.errorContainer 
+                        else 
+                            MaterialTheme.colorScheme.tertiaryContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "🛒 ADD TO CART DEBUG",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (debugInfo!!.statusCode != 200 && debugInfo!!.statusCode != 201) 
+                                    MaterialTheme.colorScheme.onErrorContainer 
+                                else 
+                                    MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            IconButton(onClick = { viewModel.clearDebugInfo() }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss Debug Info",
+                                    tint = if (debugInfo!!.statusCode != 200 && debugInfo!!.statusCode != 201) 
+                                        MaterialTheme.colorScheme.onErrorContainer 
+                                    else 
+                                        MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
+                        }
+                        
+                        val textColor = if (debugInfo!!.statusCode != 200 && debugInfo!!.statusCode != 201) 
+                            MaterialTheme.colorScheme.onErrorContainer 
+                        else 
+                            MaterialTheme.colorScheme.onTertiaryContainer
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(textColor.copy(alpha = 0.2f)))
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        androidx.compose.foundation.text.selection.SelectionContainer {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("1. Endpoint: ${debugInfo!!.endpoint}", color = textColor, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                Text("2. Full URL: ${debugInfo!!.fullUrl}", color = textColor, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                Text("3. Method: ${debugInfo!!.httpMethod}", color = textColor, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                
+                                Text("4. Request Body JSON:", color = textColor, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                Text(
+                                    debugInfo!!.requestBodyJson,
+                                    color = textColor.copy(alpha = 0.85f),
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier
+                                        .background(textColor.copy(alpha = 0.08f))
+                                        .padding(6.dp)
+                                        .fillMaxWidth()
+                                )
+                                
+                                Text("5. HTTP Status Code: ${debugInfo!!.statusCode ?: "EXCEPTION"}", color = textColor, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                
+                                Text("6. Raw Response Body:", color = textColor, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                Text(
+                                    debugInfo!!.rawResponseBody.ifEmpty { "Empty body / No error body" },
+                                    color = textColor.copy(alpha = 0.85f),
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier
+                                        .background(textColor.copy(alpha = 0.08f))
+                                        .padding(6.dp)
+                                        .fillMaxWidth()
+                                )
+                                
+                                if (debugInfo!!.exceptionStacktrace.isNotEmpty()) {
+                                    Text("7. Exception Stacktrace:", color = textColor, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        debugInfo!!.exceptionStacktrace,
+                                        color = textColor.copy(alpha = 0.85f),
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier
+                                            .background(textColor.copy(alpha = 0.08f))
+                                            .padding(6.dp)
+                                            .fillMaxWidth()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Search Bar
             SearchBarField(
                 query = searchQuery,
@@ -169,7 +357,7 @@ fun MenuScreen(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             } else {
-                if (errorMsg != null) {
+                if (errorMsg != null && allItems.isEmpty()) {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                         modifier = Modifier.fillMaxWidth().padding(16.dp)

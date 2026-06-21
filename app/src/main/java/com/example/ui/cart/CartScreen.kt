@@ -35,6 +35,7 @@ fun CartScreen(
     modifier: Modifier = Modifier
 ) {
     val activeOrder by viewModel.activeOrder.collectAsState()
+    val tableNumber by viewModel.tableNumber.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val errorMsg by viewModel.errorMessage.collectAsState()
     val isOnline by viewModel.isOnline.collectAsState()
@@ -52,7 +53,7 @@ fun CartScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Table $tableId Cart") },
+                title = { Text("Table ${tableNumber ?: tableId} Cart") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, "BackBtn")
